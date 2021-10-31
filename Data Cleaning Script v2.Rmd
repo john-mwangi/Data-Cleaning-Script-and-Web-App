@@ -1,0 +1,664 @@
+---
+title: "Crafted Pizza - Data Cleaning"
+author: "John Mwangi"
+date: "1/17/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Loading required packages
+
+```{r}
+rm(list = ls())
+
+if(!require(pacman)){install.packages("pacman")}
+pacman::p_load(readxl, writexl, scales, lubridate, tidyverse)
+```
+
+Setting folder paths
+
+```{r}
+# Working dir
+getwd()
+
+# Folder paths
+sales_path <- "../Sales/"
+expenses_path <- "../Expenses/"
+main_path <- "../../Main/"
+
+# Branches
+sheets <- c("KK", "KB")
+
+# Pizza price lists
+pizza_large <- c(850,900,950,1000)
+pizza_medium <- c(650,700,750,800)
+pizza_small <- c(450,500,550,600)
+```
+
+Read all sheets in one excel and combine them.
+
+```{r}
+tryCatch(expr = read_excel(path = "../Sales/Sep2021.xlsx", sheet = "KK"),
+         error = function(e){
+           read_excel(path = "../Sales/Sep2021.xlsx")
+         })
+
+try(expr = read_excel(path = "../Sales/Sep2021.xlsx", sheet = "KB"),
+    silent = TRUE)
+```
+
+
+```{r}
+read_sales <- function(filepaths){
+  
+  file_kk <- tryCatch(expr = read_excel(path = filepaths, 
+                                        sheet = sheets[1],
+                                        col_names = FALSE) %>% 
+                        set_names("data") %>% 
+                        mutate(filepath = filepaths),
+                      
+         error = function(e){
+           read_excel(path = filepaths,
+                      col_names = FALSE) %>%
+             set_names("data") %>% 
+             mutate(filepath = filepaths)
+         })
+  
+  file_kk <- file_kk %>% mutate(branch = sheets[1])
+
+  file_kb <- try(expr = read_excel(path = filepaths, 
+                                   sheet = sheets[2], 
+                                   col_names = FALSE) %>% 
+                   set_names("data") %>% 
+                   mutate(filepath = filepaths,
+                          branch = sheets[2]),
+                 silent = TRUE)
+  
+  file_df <- rbind(file_kk, file_kb)
+  
+  file_df <- file_df %>% filter(str_detect(string = filepath, pattern = "xlsx$"))
+  
+  return(file_df)
+}
+
+read_sales(filepaths = "../Sales/Sep2021.xlsx")
+```
+
+Read all files in one go.
+
+```{r}
+filepaths <- 
+  dir(path = sales_path, 
+      all.files = FALSE, 
+      pattern = ".xlsx$", 
+      full.names = TRUE)
+
+filepaths
+
+sales_data <- filepaths %>% 
+  map_dfr(read_sales) %>% 
+  mutate(data = str_to_lower(string = data))
+
+sales_data
+```
+
+Extract branch
+
+```{r}
+sales_data <-
+sales_data %>% 
+  mutate(branch = if_else(branch=="KK", true = "kikuyu", false = "kabete"))
+
+sales_data %>% count(branch)
+```
+
+Extract year and month. Create date column.
+
+
+```{r}
+sales_data <- 
+  sales_data %>% 
+  extract(col = filepath, 
+          into = c("month","year"), 
+          regex = ".*/([[:alpha:]]+)([[:digit:]]+)")
+
+
+sales_data <- 
+  sales_data %>% 
+  mutate(day = str_extract(string = data, pattern = "^\\d\\d?\\w\\w")) %>% 
+  fill(day, .direction = "down") %>% 
+  mutate(day = parse_number(day),
+         date = paste0(day,month,year),
+         date = dmy(date)) %>% 
+  select(sales = data, branch, date)
+
+sales_data <-
+sales_data %>% 
+  arrange(desc(date),
+          branch)
+
+sales_data %>% group_by(branch) %>% summarise(range(date))
+```
+
+Extract product, price and location.
+
+```{r}
+sales_data <-
+sales_data %>% 
+  extract(col = sales, into = c("product","price_"), regex = "([[:alpha:]]+.*)-(\\d.*)", remove = FALSE, convert = FALSE) %>% 
+  mutate(price_ = str_remove_all(string = price_, pattern = "/[[:alpha:]]+")) %>% 
+  separate(col = price_, into = c("price", "extras"), sep = "/", remove = FALSE, convert = FALSE) %>% 
+  mutate(across(.cols = c(price, extras), .fns = parse_number)) %>% 
+  select(-price_) %>% 
+  extract(col = sales, into = "location", regex = "\\d+-([[:alpha:]]+/?[[:alpha:]]+)", remove = FALSE, convert = FALSE) %>% 
+  mutate(location = str_remove(string = location, pattern = "/[[:alpha:]]+"))
+
+sales_data
+```
+
+Filter out unnecessary rows i.e. rows without price information but keeping rows with no sales. Replace NAs with zero.
+
+```{r}
+sales_data <- sales_data %>% 
+  filter(!is.na(price) | !str_detect(sales, "[:digit:]")) %>% 
+  replace_na(list(price = 0, extras = 0))
+
+sales_data
+```
+
+Include product categories: pizza, sausage, fries, chicken, sandwich,  burgers
+
+```{r}
+sausage_regex <- "sausage"
+chicken_regex <- "^chicken$"
+sandwich_regex <- "sandwich"
+fries_regex <- "fries|fry|poussin|masala|cheesy|poisson|^spicy$|spicy f.*"
+burger_regex <- "burger|/|bacon"
+bhajia_regex <- "bhajia"
+
+sales_data <- sales_data %>% 
+  mutate(category = case_when(str_detect(product,sausage_regex) ~ "sausage",
+                              str_detect(product,chicken_regex) ~ "chicken",
+                              str_detect(product,sandwich_regex) ~ "sandwich",
+                              str_detect(product,fries_regex) ~ "fries",
+                              str_detect(product,burger_regex) ~ "burger",
+                              str_detect(product,bhajia_regex) ~ "bhajia",
+                              str_detect(product,"sales") ~ "no sales",
+                              TRUE ~ "pizza")) %>% 
+  mutate(category = na_if(category,"NA"))
+
+
+sales_data
+```
+
+Corrected spellings. We have varieties of pizza, burgers, sandwiches, fries but not sausages, chicken
+
+```{r}
+bce_regex <- "b/e/c|b/c/e|e/c/b|c/e/b|b, c and e|bacon.*egg"
+bc_regex <- "b/c burger|bacon and cheese|cheese and bacon|b and c|c and b|bacon cheese|bacon burger and cheese"
+md_regex <- "^deluxe$|meat deluxe|meaty deluxe"
+poussin_regex <- "poussin|poisson"
+regular_fries <- "^fry$|^fries$|salted"
+ss_regex <- "sweet|s and"
+margh_regex <- "margharita|margarita"
+original_burger <- "^burgers?$|original"
+
+
+sales_data <- 
+  sales_data %>% 
+  mutate(product_name = case_when(category=="sausage" ~ "sausage",
+                                   category=="chicken" ~ "chicken",
+                                   TRUE ~ product)) %>% 
+  mutate(product_name = case_when(category=="fries" & str_detect(product,"cheesy") ~ "cheesy fries",
+                                  category=="fries" & str_detect(product,"masala") ~ "masala fries",
+                                  category=="fries" & str_detect(product,poussin_regex) ~ "poussin fries",
+                                  category=="fries" & str_detect(product,"spicy") ~  "spicy fries",
+                                  category=="fries" & str_detect(product,regular_fries) ~ "regular fries",
+                                  TRUE ~ product_name)) %>% 
+  mutate(product_name = case_when(category=="sandwich" & str_detect(product,"chicken") ~ "chicken sandwich",
+                                   category=="sandwich" & str_detect(product,"beef") ~ "beef sandwich",
+                                   category=="sandwich" & str_detect(product,"egg") ~ "egg sandwich",
+                                   TRUE ~ product_name)) %>% 
+  mutate(product_name = case_when(category=="pizza" & str_detect(product,"periperi") ~ "chicken periperi",
+                                   category=="pizza" & str_detect(product,"bbq") ~ "bbq beef",
+                                   category=="pizza" & str_detect(product,ss_regex) ~ "sweet and sour chicken",
+                                   category=="pizza" & str_detect(product,margh_regex) ~ "margherita",
+                                   category=="pizza" & str_detect(product,"hawaian") ~ "hawaiian",
+                                   category=="pizza" & str_detect(product,md_regex) ~ "meat deluxe",
+                                   category=="pizza" & str_detect(product,"^pepperoni$") ~ "beef pepperoni",
+                                   TRUE ~ product_name)) %>%
+  mutate(product_name = case_when(category=="burger" & str_detect(product,original_burger) ~ "original burger",
+                                   category=="burger" & str_detect(product,bce_regex) ~ "bacon,cheese,egg burger",
+                                   category=="burger" & str_detect(product,bc_regex) ~ "bacon and cheese burger",
+                                   category=="burger" & str_detect(product,"bacon burger") ~ "bacon burger",
+                                   category=="burger" & str_detect(product,"cheese burger") ~ "cheese burger",
+                                   TRUE ~ product_name)) %>% 
+  mutate(category = ifelse(product_name=="hawaiian/pepperoni","pizza",category))
+
+sales_data
+```
+
+Determining product sizes for chicken and pizza
+
+```{r}
+# Modulo function. We'll use apply instead of a second for loop over the price vector.
+# The idea is to give it a price and return a vector of results then take that and do apply()
+mod_price <- function(x, price_list){
+  mod <- c()
+  for(p in seq_along(price_list)){
+    mod[p] <- x %% price_list[p]
+  }
+  return(mod)
+}
+
+# Applying the custom function
+sales_data <- 
+  sales_data %>% 
+  mutate(mod_pizza_large = map(.x = price, .f = mod_price, price_list = pizza_large),
+         mod_pizza_medium = map(.x = price, .f = mod_price, price_list = pizza_medium),
+         mod_pizza_small = map(.x = price, .f = mod_price, price_list = pizza_small)) %>% 
+  mutate(mod_pizza_large = map_dbl(.x = mod_pizza_large, .f = min),
+         mod_pizza_medium = map_dbl(.x = mod_pizza_medium, .f = min),
+         mod_pizza_small = map_dbl(.x = mod_pizza_small, .f = min)) %>% 
+  mutate(size = case_when(mod_pizza_large==0 ~ "large",
+                          mod_pizza_medium==0 ~ "medium",
+                          mod_pizza_small==0 ~ "small",
+                          TRUE ~ "Unknown")) %>% 
+  mutate(size = case_when(size=="Unknown" & category=="pizza" & price>=min(pizza_large) ~ "large",
+                          size=="Unknown" & category=="pizza" & price<=min(pizza_medium) ~ "small",
+                          size=="Unknown" & category=="pizza" & price>min(pizza_medium) & price<min(pizza_large) ~ "medium",
+                          TRUE ~ size)) %>% 
+  select(-starts_with("mod")) %>% 
+  mutate(size = if_else(category == "pizza", true = size, false = "Unknown"))
+
+sales_data
+
+# Alternative approach
+# Ref: https://www.youtube.com/watch?v=5lJX4IgmqRA
+# mod_pizza_large <- lapply(X = price, FUN = mod_price, price_list = pizza_large)
+# mod_pizza <- sapply(X = mod_pizza_large, FUN = function(x) min(unlist(x)))
+```
+
+Adding chicken sizes
+
+```{r}
+chicken_price <- c(200)
+
+sales_data <- sales_data %>% 
+  mutate(size = ifelse(test = category=="chicken", 
+                       yes = paste0((price/chicken_price)*0.25,"kg"), 
+                       no = size))
+
+sales_data %>% filter(category=="chicken")
+```
+
+Everything else the size is same as category.
+
+```{r}
+sales_data <- 
+  sales_data %>% 
+  mutate(size = ifelse(!category %in% c("pizza","chicken"), category, size))
+
+sales_data
+```
+
+Final renaming, rearranging, selection of columns
+
+```{r}
+colnames(sales_data) <- str_to_title(colnames(sales_data))
+
+sales_data <- sales_data %>%
+  select(-Sales,-Product) %>% 
+  rename(Pizza = Product_name) %>% 
+  mutate(Revenue = Price + Extras) %>% 
+  select(Date,Branch,Pizza,Size,Price,Extras,Revenue,Location,Category) %>% 
+  mutate_if(.predicate = is.character, .funs = str_to_title)
+
+sales_data
+```
+
+Simple summaries for sales.
+
+```{r}
+sales_summary <-
+sales_data %>% 
+  group_by(Branch, Year = year(Date)) %>% 
+  mutate(revenue_yr = sum(Revenue, na.rm = TRUE)) %>% 
+  ungroup() %>% 
+  group_by(Branch, Year, Month = month(Date)) %>% 
+  mutate(revenue_mon = sum(Revenue, na.rm = TRUE)) %>% 
+  ungroup() %>% 
+  select(Branch, Year, Month, revenue_mon, revenue_yr) %>% 
+  group_by(Branch, Year, Month) %>% 
+  summarise(revenue_mon = mean(revenue_mon),
+            revenue_yr = mean(revenue_yr)) %>% 
+  arrange(Branch, Year, Month) %>% 
+  ungroup()
+
+sales_summary %>% 
+  arrange(Branch, desc(Year), Month)
+```
+
+
+```{r}
+sales_summary_chart <- sales_summary %>%
+  group_by(Branch) %>% 
+  mutate(mon_abr = month(x = paste0(Year,"-",Month,"-01"), label = TRUE, abbr = TRUE)) %>% 
+  mutate(year_mon = paste0(mon_abr," ",Year)) %>% 
+  mutate(period = row_number()) %>% 
+  mutate(year_mon = fct_reorder(year_mon, period)) %>% 
+  ungroup()
+
+sales_summary_chart
+```
+
+```{r}
+branches = unique(sales_summary_chart$Branch)
+
+calc_trends <- function(tbl, yr){
+  
+  trends = tibble(.rows = 0)
+  
+  for (branch in seq_along(branches)){
+    trend_branch <- lm(formula = revenue_mon ~ period, data = tbl %>% filter(Branch==branches[branch] & Year %in% yr)) %>% 
+    broom::tidy() %>% 
+    mutate(sign = sign(estimate),
+           sign = ifelse(test = sign==1,yes = "increasing",no = "decreasing"),
+           estimate = round(estimate)) %>% 
+    filter(term == "period") %>%
+    mutate(branch = branches[branch]) %>% 
+    select(branch, estimate, sign)
+    
+    trends <- bind_rows(trends, trend_branch)
+  }
+  
+  trends <- trends %>% arrange(branch)
+  return(trends)
+}
+
+
+calc_trends(tbl = sales_summary_chart, yr = c(2021))
+```
+
+
+```{r}
+sales_summary_chart %>% 
+  filter(Branch == "Kikuyu" & Year==2021) %>% 
+  mutate(year_mon = fct_reorder(year_mon, period)) %>% 
+  ggplot(aes(x = year_mon, y = revenue_mon, group = 1)) +
+  geom_line() +
+  scale_y_continuous(labels = dollar_format(prefix = "KES "))+
+  geom_smooth(method = "lm", formula = "y~x")+
+  theme(axis.text.x = element_text(angle = 90)) +
+  labs(title = "Kikuyu Branch Sales",
+       y = NULL,
+       x = NULL)
+
+sales_summary_chart %>% 
+  group_by(Branch) %>% 
+  filter(Year==2021) %>% 
+  summarise(sd = sd(revenue_mon))
+```
+
+Sales Chart.
+
+```{r}
+rev_totals <-
+  sales_summary_chart %>% 
+  group_by(Branch, Year) %>% 
+  summarise(revenue = sum(revenue_mon)) %>% 
+  arrange(Branch, Year)
+
+rev_totals
+```
+
+
+```{r}
+yr <- c(2021)
+trends <- calc_trends(tbl = sales_summary_chart, yr = yr)
+rev <- rev_totals %>% filter(Year == yr)
+
+sales_summary_chart %>% 
+  filter(Year %in% yr) %>% 
+  mutate(year_mon = tidytext::reorder_within(x = year_mon, by = period, within = Branch)) %>% 
+  ggplot(aes(x = year_mon, y = revenue_mon, group = 1)) +
+  geom_line() +
+  scale_y_continuous(labels = dollar_format(prefix = "KES ")) +
+  geom_smooth(method = "lm", formula = "y~x") +
+  theme(axis.text.x = element_text(angle = 90)) +
+  facet_wrap(~Branch, scales = "free_x") +
+  tidytext::scale_x_reordered() +
+  labs(title = glue::glue("Monthly Branch Sales in {yr}"),
+       subtitle = glue::glue("{trends$branch[1]}: {rev$revenue[1]} {trends$sign[1]} at {trends$estimate[1]}
+                             {trends$branch[2]}: {rev$revenue[2]} {trends$sign[2]} at {trends$estimate[2]}"),
+       y = NULL,
+       x = NULL)
+```
+
+Import expenses data
+
+```{r}
+expense_files <-
+dir(path = expenses_path, 
+    pattern = "^Transactions.*", 
+    all.files = FALSE, 
+    full.names = TRUE, 
+    recursive = FALSE, 
+    ignore.case = TRUE)
+
+expenses_df <-
+expense_files %>% 
+  map_df(.f = read_csv) %>% 
+  mutate(Account = str_to_lower(Account)) %>% 
+  mutate(Branch = if_else(str_detect(string = Account, pattern = "kikuyu|pizzeria"), true = "Kikuyu", false = "Kabete")) %>% 
+  mutate(Date = dmy(Date)) %>% 
+  arrange(Branch,
+          desc(Date))
+
+expenses_df
+
+expenses_df %>%
+  count(Branch)
+
+expenses_df %>% 
+  group_by(Branch) %>% 
+  summarise(range(Date))
+```
+
+Read salaries and rent
+
+```{r}
+fixed_costs <-
+read_csv(file = paste0(expenses_path,"fixed_costs.csv")) %>% 
+  mutate(Date = paste0("01",Month,Year)) %>% 
+  mutate(Date = dmy(Date)) %>% 
+  select(-Month, -Year)
+
+fixed_costs %>% count(Branch)
+range(fixed_costs$Date)
+```
+
+
+```{r}
+# Bind fixed and variable costs
+all_expenses <- bind_rows(expenses_df, fixed_costs) %>% 
+  mutate(Amount = abs(Amount)) %>% 
+  arrange(Branch,
+          desc(Date))
+
+all_expenses
+```
+
+Simple summaries for expenses.
+
+```{r}
+
+expenses_summary <-
+all_expenses %>% 
+  group_by(Branch, Year = year(Date)) %>% 
+  mutate(expenses_yr = sum(Amount, na.rm = TRUE)) %>% 
+  ungroup() %>% 
+  group_by(Branch, Year, Month = month(Date)) %>% 
+  mutate(expenses_mon = sum(Amount, na.rm = TRUE)) %>% 
+  ungroup() %>% 
+  select(Branch, Year, Month, expenses_mon, expenses_yr) %>% 
+  group_by(Branch, Year, Month) %>% 
+  summarise(expenses_mon = mean(expenses_mon),
+            expenses_yr = mean(expenses_yr)) %>% 
+  arrange(Branch, Year, Month) %>% 
+  ungroup()
+
+expenses_summary
+```
+
+Sales, expenses, and profit summaries
+
+```{r}
+profit_summary <- 
+  inner_join(x = sales_summary, 
+             y = expenses_summary, by = c("Branch","Year","Month")) %>% 
+  mutate(profit_mon = revenue_mon - expenses_mon)
+
+profit_summary %>% 
+  select(Branch, Year, Month, revenue_mon, expenses_mon, profit_mon) %>% 
+  filter(Year == 2021)
+```
+
+Exporting current data
+
+```{r}
+# Export data
+exp_file <- paste0("CF Data ",as.character(Sys.time()),".xlsx")
+exp_file <- gsub(pattern = ":|-",replacement = "",x = exp_file)
+
+write_xlsx(x = list(Sales = sales_data, 
+                    Costs = all_expenses), 
+           path = paste0(main_path,exp_file))
+```
+
+Merge with all previous dashboard data
+
+```{r}
+this_sales <- read_excel(paste0(main_path,exp_file), sheet = "Sales") %>% 
+  mutate(Date = as.Date(Date))
+
+this_costs <- 
+  read_excel(paste0(main_path,exp_file), sheet = "Costs") %>% 
+  mutate(Date = as.Date(Date)) %>% 
+  select(Date,Branch,Category,Amount) %>% 
+  rename(Item = Category,
+         "Total cost" = Amount)
+
+main_sales <- read_excel(paste0(main_path,"Crafted Pizza Data.xlsx"), sheet = 'Sales') %>% 
+  mutate(Price = as.double(Price),
+         Date = as.Date(Date))
+
+main_costs <- read_excel(paste0(main_path,"Crafted Pizza Data.xlsx"), sheet = 'Costs') %>% 
+  mutate(Date = as.Date(Date))
+
+all_sales <- bind_rows(main_sales,this_sales) %>% 
+  mutate(Branch = coalesce(Branch,"Kikuyu")) %>% 
+  arrange(Date)
+
+all_costs <- bind_rows(main_costs,this_costs) %>% 
+  mutate(Branch = coalesce(Branch,"Kikuyu")) %>% 
+  arrange(Date)
+
+main_coords <- read_excel(paste0(main_path,"Crafted Pizza Data.xlsx"), sheet = 'Coordinates') 
+```
+
+Export merged data
+
+```{r}
+all_sales <- all_sales %>% arrange(desc(Date), Branch)
+
+all_costs <- all_costs %>% arrange(desc(Date), Branch)
+```
+
+Monthly and daily summaries.
+
+Summarise costs/sales by day then do an full_join.
+
+```{r}
+monthly_sales <-
+all_sales %>% 
+  select(Date, Revenue, Branch) %>% 
+  group_by(Date, Branch) %>% 
+  summarise(Revenue = sum(Revenue))
+
+monthly_costs <-
+all_costs %>% 
+  select(Date, `Total cost`, Branch) %>% 
+  group_by(Date, Branch) %>% 
+  summarise(`Total cost` = sum(`Total cost`))
+
+daily_summaries <-
+monthly_sales %>% 
+  full_join(monthly_costs, by = c("Date", "Branch")) %>% 
+  replace_na(list(Revenue = 0, `Total cost` = 0)) %>% 
+  mutate(profit = Revenue - `Total cost`) %>% 
+  mutate(year_month = paste0(year(Date), strftime(x = Date, format = "%m"))) %>% 
+  relocate(year_month, .after = Date) %>% 
+  arrange(Branch, desc(Date)) %>% 
+  ungroup()
+
+monthly_summaries <-
+daily_summaries %>% 
+  select(-Date) %>% 
+  group_by(year_month, Branch) %>% 
+  summarise(across(.cols = c(Revenue, `Total cost`, profit), .fns = sum)) %>% 
+  arrange(Branch, desc(year_month)) %>% 
+  ungroup()
+```
+
+Sanity checks...
+
+```{r}
+monthly_summaries %>% filter(profit < -1000)
+
+monthly_summaries %>% 
+  mutate(year = str_sub(string = year_month, start = 1, end = 4)) %>% 
+  group_by(Branch, year) %>% 
+  summarise(sum(profit))
+```
+
+Power BI file.
+
+```{r}
+now <- Sys.time()
+now <- gsub(pattern = ":|-", replacement = "", x = now)
+now_file <- paste0("Crafted Pizza Data ",now,".xlsx")
+
+write_xlsx(x = list(Daily_Summaries = daily_summaries,
+                    Monthly_Summaries = monthly_summaries,
+                    Sales = all_sales, 
+                    Costs = all_costs, 
+                    Coordinates = main_coords), 
+           path = paste0(main_path,now_file))
+```
+
+
+```{r}
+daily_summaries %>% 
+  group_by(Branch) %>% 
+  filter(year(Date)==2021) %>% 
+  summarise(across(.cols = c(Revenue, `Total cost`, profit), .fns = sum))
+```
+
+
+
+```{r}
+sales_data %>% 
+  mutate(month = month(Date),
+         year = year(Date)) %>% 
+  group_by(Category,year,month) %>% 
+  summarise(revenue = sum(Revenue),
+            n = n()) %>%
+  summarise(revenue = mean(revenue),
+            units_pm = mean(n)) %>% 
+  filter(year != 2021)
+```
+
