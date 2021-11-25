@@ -489,7 +489,9 @@ all_expenses <- bind_rows(expenses_df, fixed_costs) %>%
   arrange(Branch,
           desc(Date))
 
-all_expenses
+all_expenses <-
+all_expenses %>% 
+  mutate(Category = str_replace(string = Category, pattern = "Salary", replacement = "Salaries"))
 ```
 
 Simple summaries for expenses.
@@ -524,7 +526,7 @@ profit_summary <-
 
 profit_summary %>% 
   select(Branch, Year, Month, revenue_mon, expenses_mon, profit_mon) %>% 
-  filter(Year == 2021)
+  filter(Year == 2021, Branch == "Kikuyu")
 ```
 
 Exporting current data
@@ -614,6 +616,19 @@ daily_summaries %>%
   ungroup()
 ```
 
+Creating key for joining the daily summaries and monthly summaries.
+
+```{r}
+monthly_summaries <-
+monthly_summaries %>% 
+  mutate(key = paste0(Branch,"_",year_month))
+
+daily_summaries <-
+daily_summaries %>% 
+  mutate(key = paste0(Branch,"_",year_month))
+```
+
+
 Sanity checks...
 
 ```{r}
@@ -630,7 +645,7 @@ Power BI file.
 ```{r}
 now <- Sys.time()
 now <- gsub(pattern = ":|-", replacement = "", x = now)
-now_file <- paste0("Crafted Pizza Data ",now,".xlsx")
+now_file <- paste0("CF_PowerBI_Data_",now,".xlsx")
 
 write_xlsx(x = list(Daily_Summaries = daily_summaries,
                     Monthly_Summaries = monthly_summaries,
@@ -640,6 +655,7 @@ write_xlsx(x = list(Daily_Summaries = daily_summaries,
            path = paste0(main_path,now_file))
 ```
 
+====== END ===========
 
 ```{r}
 daily_summaries %>% 
