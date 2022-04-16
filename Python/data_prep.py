@@ -8,19 +8,25 @@ from glob import glob
 import os
 from pprint import pprint
 import re
+from config import SALES_PATH, EXPENSES_PATH, DESKTOP_PATH
+
+# %%
+pd.options.display.max_columns = None
+# pd.options.display.max_rows = None
+
+# %%
+# Price lists
+pizza_large = (850, 900, 950, 1000)
+pizza_medium = (650, 700, 750, 800)
+pizza_small = (450, 500, 550, 600)
 
 # %% [markdown]
 # # Revenue
 # ## File paths
 
 # %%
-SALES = "../../../RawData/Sales/"
-EXPENSES = "../../../RawData/Expenses/"
-MAIN = "../../Main/"
-
-# %%
-sales_files = glob(pathname=os.path.join(SALES, "*.xlsx"))
-expense_files = glob(pathname=os.path.join(EXPENSES, "*.csv"))
+sales_files = glob(pathname=os.path.join(SALES_PATH, "*.xlsx"))
+expense_files = glob(pathname=os.path.join(EXPENSES_PATH, "*.csv"))
 
 # %%
 print(sales_files[0])
@@ -56,6 +62,7 @@ sales_df.shape
 
 # %%
 def read_unnamed_sheet(path: str) -> pd.DataFrame:
+    """Reads unnamed worksheets i.e. Sheet1."""
     temp_dict = pd.read_excel(
         path, sheet_name=["Sheet1"], names=["data"], header=None
     )
@@ -66,6 +73,7 @@ def read_unnamed_sheet(path: str) -> pd.DataFrame:
 
 
 def read_named_sheets(path: str) -> pd.DataFrame:
+    """Reads the named worksheets i.e. either KB or KK."""
     temp_dict = pd.read_excel(
         path, sheet_name=["KK", "KB"], names=["data"], header=None
     )
@@ -93,7 +101,7 @@ for path in sales_files:
 sales_df.shape
 
 # %%
-sales_df
+sales_df.head(10)
 
 # %% [markdown]
 # ## Extract prices
@@ -102,7 +110,7 @@ sales_df
 price_rgx = r"\w+-(\d+)"
 revenue = sales_df["data"].str.extract(pat=price_rgx).astype(float)
 sales_df["revenue"] = revenue
-sales_df
+sales_df.head(10)
 
 # %% [markdown]
 # ## Extract dates
@@ -111,17 +119,17 @@ sales_df
 months = sales_df["file_name"].str.extract(".*?(\w+\d+.xlsx)")
 sales_df["months"] = months
 sales_df["months"] = sales_df.months.str.replace(".xlsx", "", regex=False)
-sales_df
+sales_df.head(10)
 
 # %%
 days = sales_df.data.str.extract("^(\d+)")
 sales_df["days"] = days
 sales_df["days"] = sales_df.days.fillna(method="ffill")
-sales_df
+sales_df.head(10)
 
 # %%
 sales_df["sales_day"] = sales_df.days + sales_df.months
-sales_df
+sales_df.head(10)
 
 # %%
 sales_df["date"] = pd.to_datetime(sales_df.sales_day, format="%d%b%Y")
@@ -143,7 +151,7 @@ sales_summary.head(10)
 # ## File paths
 
 # %%
-expense_files = glob(pathname=os.path.join(EXPENSES, "*.csv"))
+expense_files = glob(pathname=os.path.join(EXPENSES_PATH, "*.csv"))
 kabete_files = [path for path in expense_files if "KB" in path]
 kikuyu_files = [path for path in expense_files if "KB" not in path]
 
@@ -200,7 +208,7 @@ profit_summary["profit"] = profit_summary.sales - profit_summary.costs
 profit_summary.head(10)
 
 # %% [markdown]
-# ## Overall
+# ## All branches
 
 # %%
 overall_performance = profit_summary.groupby(
@@ -208,6 +216,20 @@ overall_performance = profit_summary.groupby(
 ).aggregate(profit=("profit", "sum"))
 
 overall_performance.head(10)
+
+# %% [markdown]
+# ## By year
+
+# %%
+profit_summary.head(10)
+profit_summary["year"] = list(map(lambda x: x[:4], profit_summary.year_mon))
+profit_summary.head(10)
+
+# %%
+yearly_profit = profit_summary.groupby(by="year", as_index=False).aggregate(
+    yearly_profit=("profit", "sum")
+)
+yearly_profit
 
 # %% [markdown]
 # # Product info
@@ -281,10 +303,6 @@ products.groupby(by="category", as_index=False).aggregate(
 # ### Modulo function
 
 # %%
-pizza_large = (850, 900, 950, 1000)
-pizza_medium = (650, 700, 750, 800)
-pizza_small = (450, 500, 550, 600)
-
 1000 % 400  # Modulo
 1000 // 400  # Floor division
 
@@ -317,13 +335,13 @@ products.revenue.apply(
 # %%
 products = products.assign(
     mod_large=products.revenue.apply(
-        lambda x: mod_price(x, price_list=pizza_large, size="Large")
+        lambda x: mod_price(x, price_list=pizza_large, size="large")
     ),
     mod_medium=products.revenue.apply(
-        lambda x: mod_price(x, price_list=pizza_medium, size="Medium")
+        lambda x: mod_price(x, price_list=pizza_medium, size="medium")
     ),
     mod_small=products.revenue.apply(
-        lambda x: mod_price(x, price_list=pizza_small, size="Small")
+        lambda x: mod_price(x, price_list=pizza_small, size="small")
     ),
 )
 
@@ -343,12 +361,12 @@ size_results = zip(products.mod_large, products.mod_medium, products.mod_small)
 for size in size_results:
     if any(size) == False:
         pizza_sizes.append(False)
-    elif "Large" in size:
-        pizza_sizes.append("Large")
-    elif "Medium" in size and "Large" not in size:
-        pizza_sizes.append("Medium")
+    elif "large" in size:
+        pizza_sizes.append("large")
+    elif "medium" in size and "large" not in size:
+        pizza_sizes.append("medium")
     else:
-        pizza_sizes.append("Small")
+        pizza_sizes.append("small")
 
 pizza_sizes[:10]
 
@@ -364,44 +382,37 @@ products.head(10)
 products.query("category=='pizza' & pizza_sizes==False").revenue.value_counts()
 # products.query("category=='pizza' & pizza_sizes==False & revenue<1000")
 
+# %%
 """
-- Filter for pizza category
-- if pizza_size == False:
-- If price >= min large, then Large
-- If price < min large but >= min medium, then medium
-- Else, small
+- if the category is not pizza, return category
+- if category is pizza and size is False:
+    - If price >= min large, then Large
+    - If price < min large but >= min medium, then medium
+    - Else, small
+- otherwise return size
 """
+
 pizza_sizes2 = []
-for size, price in zip(products.pizza_sizes, products.revenue):
-    if size == False:
+for size, price, category in zip(
+    products.pizza_sizes, products.revenue, products.category
+):
+    if category is not "pizza":
+        pizza_sizes2.append(category)
+    elif (category is "pizza") and (size is False):
         if price >= min(pizza_large):
-            pizza_sizes2.append("Large")
+            pizza_sizes2.append("large")
         elif price < min(pizza_large) and price >= min(pizza_medium):
-            pizza_sizes2.append("Medium")
+            pizza_sizes2.append("medium")
         else:
-            pizza_sizes2.append("Small")
+            pizza_sizes2.append("small")
     else:
         pizza_sizes2.append(size)
 
 pizza_sizes2[:10]
 
 # %%
-products["pizza_sizes2"] = pizza_sizes2
+products["size"] = pizza_sizes2
 products.head(10)
-
-# %% [markdown]
-# ### Refine #3
-
-# %%
-pizza_sizes3 = []
-for category, size in zip(products.category, products.pizza_sizes2):
-    if category is not "pizza":
-        pizza_sizes3.append(category)
-    else:
-        pizza_sizes3.append(size)
-
-products["size"] = pizza_sizes3
-products
 
 # %% [markdown]
 # ### Drop columns
@@ -417,12 +428,13 @@ products_final = products.drop(
 products_final.head(10)
 
 # %%
-pd.concat(objs=[sales_df, products_final], axis=1)
+pd.concat(objs=[sales_df, products_final], axis=1).head(10)
 
 # %% [markdown]
 # # Export
 
 # %%
-# with pd.ExcelWriter(path="CF_Summary.xlsx") as writer:
+# with pd.ExcelWriter(path=os.path.join(DESKTOP_PATH, "CF_Summary.xlsx")) as writer:
 #     profit_summary.to_excel(excel_writer=writer, sheet_name="profit_summary", index=False)
 #     overall_performance.to_excel(excel_writer=writer, sheet_name="overall_performance", index=False)
+#     yearly_profit.to_excel(excel_writer=writer, sheet_name="yearly_profit", index=False)
