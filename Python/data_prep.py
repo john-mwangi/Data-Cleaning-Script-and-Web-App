@@ -26,9 +26,7 @@ pizza_small = (450, 500, 550, 600)
 
 # %%
 sales_files = glob(pathname=os.path.join(SALES_PATH, "*.xlsx"))
-expense_files = glob(pathname=os.path.join(EXPENSES_PATH, "*.csv"))
 
-# %%
 print(sales_files[0])
 print(sales_files[12])
 sales_files[:10]
