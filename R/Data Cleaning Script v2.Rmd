@@ -25,9 +25,9 @@ Setting folder paths
 getwd()
 
 # Folder paths
-sales_path <- "../Sales/"
-expenses_path <- "../Expenses/"
-main_path <- "../../Main/"
+sales_path <- "../../../RawData/Sales/"
+expenses_path <- "../../../RawData/Expenses/"
+main_path <- "../../../Main/"
 
 # Branches
 sheets <- c("KK", "KB")
@@ -41,12 +41,12 @@ pizza_small <- c(450,500,550,600)
 Read all sheets in one excel and combine them.
 
 ```{r}
-tryCatch(expr = read_excel(path = "../Sales/Sep2021.xlsx", sheet = "KK"),
+tryCatch(expr = read_excel(path = "../../../RawData/Sales/Sep2021.xlsx", sheet = "KK"),
          error = function(e){
-           read_excel(path = "../Sales/Sep2021.xlsx")
+           read_excel(path = "../../../RawData/Sales/Sep2021.xlsx")
          })
 
-try(expr = read_excel(path = "../Sales/Sep2021.xlsx", sheet = "KB"),
+try(expr = read_excel(path = "../../../RawData/Sep2021.xlsx", sheet = "KB"),
     silent = TRUE)
 ```
 
@@ -84,7 +84,7 @@ read_sales <- function(filepaths){
   return(file_df)
 }
 
-read_sales(filepaths = "../Sales/Sep2021.xlsx")
+read_sales(filepaths = "../../../RawData/Sales/Sep2021.xlsx")
 ```
 
 Read all files in one go.
